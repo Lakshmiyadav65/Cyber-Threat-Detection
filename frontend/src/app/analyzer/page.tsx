@@ -3,7 +3,7 @@ import { useState } from "react";
 import axios from "axios";
 import {
   Shield, AlertTriangle, CheckCircle, ChevronDown,
-  ChevronUp, Upload, Loader2, Zap, FileText
+  ChevronUp, Upload, Loader2, Zap, FileText, ArrowRight
 } from "lucide-react";
 import Link from "next/link";
 
@@ -86,6 +86,14 @@ export default function AnalyzerPage() {
     model_used: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchResult, setBatchResult] = useState<{
+    total_rows: number;
+    malware_detected: number;
+    benign_detected: number;
+    model_used: string;
+    results: any[];
+  } | null>(null);
 
   const visibleFields = showAllFields ? FEATURE_FIELDS : FEATURE_FIELDS.slice(0, 12);
 
@@ -97,6 +105,7 @@ export default function AnalyzerPage() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setBatchResult(null);
     try {
       const { data } = await axios.post("/api/predict", {
         features,
@@ -117,6 +126,42 @@ export default function AnalyzerPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function handleCSVUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setBatchLoading(true);
+    setResult(null);
+    setBatchResult(null);
+    setError(null);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const { data } = await axios.post(`/api/upload?model=${selectedModel}`, formData);
+      setBatchResult(data);
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || err.message;
+      setError("Batch analysis failed. Error: " + msg);
+    } finally {
+      setBatchLoading(false);
+      e.target.value = "";
+    }
+  }
+
+  function downloadSampleCSV() {
+    const headers = FEATURE_FIELDS.map((f) => f.key).join(",");
+    const sampleRow = FEATURE_FIELDS.map((f) => f.defaultVal).join(",");
+    const csv = `${headers}\n${sampleRow}`;
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "malware_analysis_template.csv";
+    a.click();
   }
 
   const isMalware = result?.prediction === "malware";
@@ -349,34 +394,82 @@ export default function AnalyzerPage() {
             </div>
           )}
 
+          {/* Batch Result Display */}
+          {batchResult && (
+            <div
+              className="glass-card"
+              style={{
+                padding: 24,
+                marginTop: 16,
+                border: "1px solid rgba(0, 212, 255, 0.3)",
+                background: "linear-gradient(180deg, rgba(0, 212, 255, 0.05) 0%, transparent 100%)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+                <div style={{ padding: 8, background: "rgba(0, 212, 255, 0.1)", borderRadius: 8 }}>
+                  <Shield size={20} color="#00d4ff" />
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#f0f4ff" }}>Batch Results</div>
+                  <div style={{ fontSize: 11, color: "#8899bb" }}>{batchResult.total_rows} processes analyzed</div>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+                <div style={{ background: "rgba(255,77,109,0.08)", padding: "12px", borderRadius: 10, border: "1px solid rgba(255,77,109,0.15)" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: "#ff4d6d", fontFamily: "var(--font-space)" }}>{batchResult.malware_detected}</div>
+                  <div style={{ fontSize: 10, color: "#ff4d6d80", fontWeight: 700, marginTop: 2 }}>MALWARE</div>
+                </div>
+                <div style={{ background: "rgba(0,255,157,0.08)", padding: "12px", borderRadius: 10, border: "1px solid rgba(0,255,157,0.15)" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: "#00ff9d", fontFamily: "var(--font-space)" }}>{batchResult.benign_detected}</div>
+                  <div style={{ fontSize: 10, color: "#00ff9d80", fontWeight: 700, marginTop: 2 }}>BENIGN</div>
+                </div>
+              </div>
+
+              {/* Progress summary bar */}
+              <div style={{ height: 6, background: "rgba(255,255,255,0.05)", borderRadius: 3, display: "flex", overflow: "hidden", marginBottom: 20 }}>
+                <div style={{ width: `${(batchResult.malware_detected / batchResult.total_rows) * 100}%`, background: "#ff4d6d" }} />
+                <div style={{ width: `${(batchResult.benign_detected / batchResult.total_rows) * 100}%`, background: "#00ff9d" }} />
+              </div>
+
+              <Link href="/history">
+                <button className="btn-ghost" style={{ width: "100%", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+                  View Detailed Logs <ArrowRight size={14} />
+                </button>
+              </Link>
+            </div>
+          )}
+
           {/* CSV Upload */}
           <div className="glass-card" style={{ padding: 24, marginTop: 16, textAlign: "center" }}>
-            <Upload size={24} color="#8899bb" style={{ margin: "0 auto 12px" }} />
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6, color: "#d0d8f0" }}>Batch Analysis</div>
-            <div style={{ fontSize: 12, color: "#8899bb", marginBottom: 16 }}>Upload a CSV file to scan multiple processes at once</div>
-            <input
-              type="file"
-              accept=".csv"
-              id="csv-upload"
-              style={{ display: "none" }}
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                const formData = new FormData();
-                formData.append("file", file);
-                try {
-                  const { data } = await axios.post(`/api/upload?model=${selectedModel}`, formData);
-                  alert(`✅ Batch result: ${data.malware_detected} malware, ${data.benign_detected} benign out of ${data.total_rows} rows.`);
-                } catch {
-                  alert("Backend not running. Start FastAPI first.");
-                }
-              }}
-            />
-            <label htmlFor="csv-upload">
-              <span className="btn-ghost" style={{ cursor: "pointer", display: "inline-block", fontSize: 13 }}>
-                Choose CSV File
-              </span>
-            </label>
+            {batchLoading ? (
+              <div style={{ padding: "10px 0" }}>
+                <Loader2 size={32} color="#00d4ff" className="animate-spin" style={{ margin: "0 auto 16px" }} />
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#d0d8f0" }}>Processing CSV...</div>
+                <div style={{ fontSize: 12, color: "#8899bb", marginTop: 4 }}>Analyzing multiple processes</div>
+              </div>
+            ) : (
+              <>
+                <Upload size={24} color="#8899bb" style={{ margin: "0 auto 12px" }} />
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6, color: "#d0d8f0" }}>Batch Analysis</div>
+                <div style={{ fontSize: 12, color: "#8899bb", marginBottom: 16 }}>Upload a CSV file to scan multiple processes at once</div>
+                <input
+                  type="file"
+                  accept=".csv"
+                  id="csv-upload"
+                  style={{ display: "none" }}
+                  onChange={handleCSVUpload}
+                />
+                <label htmlFor="csv-upload">
+                  <span className="btn-primary" style={{ cursor: "pointer", display: "inline-block", fontSize: 13, padding: "10px 20px" }}>
+                    Choose CSV & Analyze
+                  </span>
+                </label>
+                <div style={{ fontSize: 11, color: "#8899bb", marginTop: 12 }}>
+                  Don&apos;t have a file? <span onClick={downloadSampleCSV} style={{ color: "#00d4ff", cursor: "pointer", textDecoration: "underline" }}>Download Sample CSV Template</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
